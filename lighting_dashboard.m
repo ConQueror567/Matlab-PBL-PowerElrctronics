@@ -29,7 +29,18 @@ db_iload = sum(db_iz, 2) + I_esp32;
 % Hours that were fully simulated (a Simulink run may have been stopped early)
 db_nS = min(N_slots, floor(db_t(end)/T_slot + 0.02));
 if db_nS < 1
-    error('lighting_dashboard:short', 'Simulation too short: run at least one full hour slot.');
+    % The run was stopped before the first simulated hour finished: show what
+    % there is and explain, instead of failing.
+    fprintf(['\nSimulation stopped early at t = %.1f ms of %.0f ms (%.0f %% done).\n' ...
+             'The hourly report needs at least one full hour (%.0f ms).\n' ...
+             'Press Run again and let it finish: the time at the bottom of the Simulink\n' ...
+             'window must reach %.3f s. This takes about 0.5-2 minutes; do not press Stop.\n\n'], ...
+            1e3*db_t(end), 1e3*T_stop, 100*db_t(end)/T_stop, 1e3*T_slot, T_stop);
+    figure('Name', 'Partial run: buck converter start-up', 'NumberTitle', 'off', 'Color', 'w');
+    subplot(2,1,1); plot(db_t*1e3, db_vo); grid on; ylabel('v_o [V]');
+    title(sprintf('Partial run (stopped at %.1f ms) - output voltage', 1e3*db_t(end)));
+    subplot(2,1,2); plot(db_t*1e3, db_iL); grid on; ylabel('i_L [A]'); xlabel('t [ms]');
+    return
 end
 
 %% ---------------- Per-hour metrics (steady-state window of each slot) ----------------

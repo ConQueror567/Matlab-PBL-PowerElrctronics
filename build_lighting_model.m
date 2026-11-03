@@ -38,7 +38,9 @@ new_system(mdl);
 
 %% ---------------- Model configuration ----------------
 set_param(mdl, 'SolverType', 'Fixed-step');
-set_param(mdl, 'Solver', 'ode3', 'FixedStep', 'dt_sim', 'StopTime', 'T_stop');
+% ode1 (Euler) with a 0.2 us step: the same method as run_lighting_simulation.m,
+% and about 3x faster than ode3. The step is 100x smaller than the switching period.
+set_param(mdl, 'Solver', 'ode1', 'FixedStep', 'dt_sim', 'StopTime', 'T_stop');
 if ~trySet(mdl, 'EnableMultiTasking', 'off')
     trySet(mdl, 'SolverMode', 'SingleTasking');
 end
