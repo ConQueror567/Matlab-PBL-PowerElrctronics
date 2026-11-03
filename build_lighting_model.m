@@ -54,7 +54,7 @@ set_param(mdl, 'StopFcn', 'lighting_dashboard;');
 %% ================= 1. INPUT LAYER (SENSORS) =================
 I = 'Input Layer (Sensors)';
 s = [mdl '/' I];
-add_block('built-in/SubSystem', s, 'Position', box(40, 120, 150, 200));   % input 1: zone currents
+add_block('built-in/SubSystem', s, 'Position', box(40, 140, 150, 200));   % input 1: zone currents
 sens = {'Daylight on desks (lux)', 'sens_ldr',  'LDR'; ...
         'PIR presence',            'sens_pir',  'PIR'; ...
         'DHT11 temperature (C)',   'sens_temp', 'Temp'; ...
@@ -78,7 +78,7 @@ add_block('built-in/Integrator', [s '/LED light integral'], 'Position', box(250,
 add_block('built-in/ZeroOrderHold', [s '/ADC sample'], 'Position', box(320, 413, 40, 30), 'SampleTime', 'Ts_ctrl');
 add_block('built-in/DiscreteTransferFcn', [s '/Average over Ts_ctrl'], 'Position', box(390, 405, 120, 46), ...
           'Numerator', '[1 -1]', 'Denominator', '[Ts_ctrl 0]', 'SampleTime', 'Ts_ctrl');
-add_block('built-in/Sum', [s '/LDR reading'], 'Position', box(620, 45, 30, 40), 'Inputs', '++');
+add_block('built-in/Sum', [s '/LDR reading'], 'Position', box(620, 45, 30, 40), 'Inputs', '++', 'IconShape', 'rectangular');
 connect(s, 'i_zones/1', 'LED lux per ampere/1');
 connect(s, 'LED lux per ampere/1', 'LED light integral/1');
 connect(s, 'LED light integral/1', 'ADC sample/1');
@@ -90,7 +90,7 @@ connect(s, 'LDR reading/1', 'LDR/1');
 %% ================= 2. PROCESSING LAYER (ESP32) =================
 Pr = 'Processing Layer (ESP32)';
 s = [mdl '/' Pr];
-add_block('built-in/SubSystem', s, 'Position', box(280, 100, 170, 260));
+add_block('built-in/SubSystem', s, 'Position', box(280, 100, 170, 280));
 inN = {'LDR', 'PIR', 'Temp', 'Hum', 'Vo feedback'};
 for i = 1:5
     add_block('built-in/Inport', [s '/' inN{i}], 'Position', box(30, 40 + (i-1)*70, 30, 16), 'Port', num2str(i));
@@ -130,7 +130,7 @@ add_block('built-in/Fcn', [s '/Soft-start Vref'], 'Position', box(90, 420, 150, 
           'Expr', 'Vo_ref*((u(1)<t_ss)*u(1)/t_ss + (u(1)>=t_ss))');
 add_block('built-in/ZeroOrderHold', [s '/Vref sample'], 'Position', box(260, 420, 40, 30), 'SampleTime', 'Ts_v');
 add_block('built-in/ZeroOrderHold', [s '/ADC sample vo'], 'Position', box(130, 320, 40, 30), 'SampleTime', 'Ts_v');
-add_block('built-in/Sum', [s '/Error e'], 'Position', box(320, 450, 30, 30), 'Inputs', '+-');
+add_block('built-in/Sum', [s '/Error e'], 'Position', box(320, 450, 30, 30), 'Inputs', '+-', 'IconShape', 'rectangular');
 add_block('built-in/Gain', [s '/Feed-forward 1 over Vin'], 'Position', box(380, 380, 60, 30), 'Gain', '1/Vin');
 add_block('built-in/Gain', [s '/Kp'], 'Position', box(380, 440, 60, 30), 'Gain', 'Kp_v');
 add_block('built-in/Gain', [s '/Ki'], 'Position', box(380, 500, 60, 30), 'Gain', 'Ki_v');
@@ -139,12 +139,12 @@ add_block('built-in/DiscreteIntegrator', [s '/Integral (anti-windup)'], 'Positio
           'UpperSaturationLimit', 'xi_max', 'LowerSaturationLimit', 'xi_min');
 add_block('built-in/DiscreteTransferFcn', [s '/Filtered derivative'], 'Position', box(330, 560, 170, 46), ...
           'Numerator', '[-Kd_v Kd_v]', 'Denominator', '[tau_d+Ts_v -tau_d]', 'SampleTime', 'Ts_v');
-add_block('built-in/Sum', [s '/Duty sum'], 'Position', box(560, 400, 30, 200), 'Inputs', '++++');
+add_block('built-in/Sum', [s '/Duty sum'], 'Position', box(560, 400, 30, 200), 'Inputs', '++++', 'IconShape', 'rectangular');
 add_block('built-in/Saturate', [s '/Duty limit'], 'Position', box(620, 485, 40, 30), ...
           'UpperLimit', 'd_max', 'LowerLimit', '0');
-add_block('built-in/UnitDelay', [s '/Computation delay'], 'Position', box(680, 485, 40, 30), 'SampleTime', 'Ts_v');
-add_block('built-in/Mux', [s '/Mux buck PWM'], 'Position', box(750, 440, 8, 60), 'Inputs', '2');
-add_block('built-in/Fcn', [s '/Buck PWM 50 kHz'], 'Position', box(790, 455, 200, 30), ...
+add_block('built-in/UnitDelay', [s '/Computation delay'], 'Position', box(710, 485, 40, 30), 'SampleTime', 'Ts_v');
+add_block('built-in/Mux', [s '/Mux buck PWM'], 'Position', box(790, 440, 8, 60), 'Inputs', '2');
+add_block('built-in/Fcn', [s '/Buck PWM 50 kHz'], 'Position', box(830, 455, 200, 30), ...
           'Expr', '(u(1)*fsw - floor(u(1)*fsw)) < u(2)');
 connect(s, 'Clock/1', 'Soft-start Vref/1');
 connect(s, 'Soft-start Vref/1', 'Vref sample/1');
@@ -168,6 +168,7 @@ connect(s, 'Mux buck PWM/1', 'Buck PWM 50 kHz/1');
 
 % --- 2c. Zone PWM (ESP32 LEDC, 5 kHz, phase shifted by 120 degrees) ---
 add_block('built-in/Demux', [s '/Duty demux'], 'Position', box(560, 60, 8, 150), 'Outputs', '3');
+add_block('built-in/Clock', [s '/Clock LED'], 'Position', box(560, 250, 30, 30));
 connect(s, srcDuty, 'Duty demux/1');
 add_block('built-in/Mux', [s '/Gate mux'], 'Position', box(1010, 60, 8, 150), 'Inputs', '3');
 for k = 1:3
@@ -178,16 +179,16 @@ for k = 1:3
     add_block('built-in/Mux', [s '/' mx], 'Position', box(640, y, 8, 40), 'Inputs', '2');
     add_block('built-in/Fcn', [s '/' fc], 'Position', box(700, y+5, 270, 30), ...
               'Expr', ['(u(1)*f_led + ' ph ' - floor(u(1)*f_led + ' ph ')) < u(2)']);
-    connect(s, 'Clock/1', [mx '/1']);
+    connect(s, 'Clock LED/1', [mx '/1']);
     connect(s, sprintf('Duty demux/%d', k), [mx '/2']);
     connect(s, [mx '/1'], [fc '/1']);
     connect(s, [fc '/1'], sprintf('Gate mux/%d', k));
 end
 
 outN = {'q_buck', 'g_zones', 'duty_zones', 'd_buck', 'status'};
-outY = [470, 125, 250, 300, 350];
+outY = [462, 125, 250, 560, 330];
 for i = 1:5
-    add_block('built-in/Outport', [s '/' outN{i}], 'Position', box(1090, outY(i), 30, 16), 'Port', num2str(i));
+    add_block('built-in/Outport', [s '/' outN{i}], 'Position', box(1100, outY(i), 30, 16), 'Port', num2str(i));
 end
 connect(s, 'Buck PWM 50 kHz/1', 'q_buck/1');
 connect(s, 'Gate mux/1', 'g_zones/1');
@@ -198,7 +199,7 @@ connect(s, srcStatus, 'status/1');
 %% ================= 3. POWER & LIGHTING LAYER =================
 Pw = 'Power & Lighting Layer';
 s = [mdl '/' Pw];
-add_block('built-in/SubSystem', s, 'Position', box(560, 100, 170, 160));
+add_block('built-in/SubSystem', s, 'Position', box(580, 60, 170, 140));
 add_block('built-in/Inport', [s '/q_buck'],  'Position', box(30, 60, 30, 16), 'Port', '1');
 add_block('built-in/Inport', [s '/g_zones'], 'Position', box(30, 300, 30, 16), 'Port', '2');
 
@@ -214,14 +215,14 @@ add_block('built-in/Fcn', [bs '/Inductor voltage vL'], 'Position', box(170, 70, 
 add_block('built-in/Gain', [bs '/1 over L'], 'Position', box(540, 70, 60, 30), 'Gain', '1/L_buck');
 add_block('built-in/Integrator', [bs '/Inductor current'], 'Position', box(630, 70, 40, 30), ...
           'InitialCondition', '0', 'LimitOutput', 'on', 'LowerSaturationLimit', '0', 'UpperSaturationLimit', 'inf');
-add_block('built-in/Sum', [bs '/Capacitor current'], 'Position', box(540, 210, 30, 40), 'Inputs', '+-');
+add_block('built-in/Sum', [bs '/Capacitor current'], 'Position', box(540, 210, 30, 40), 'Inputs', '+-', 'IconShape', 'rectangular');
 add_block('built-in/Gain', [bs '/1 over C'], 'Position', box(600, 215, 60, 30), 'Gain', '1/C_buck');
 add_block('built-in/Integrator', [bs '/Capacitor voltage'], 'Position', box(690, 215, 40, 30), 'InitialCondition', '0');
 add_block('built-in/Gain', [bs '/ESR'], 'Position', box(600, 290, 60, 30), 'Gain', 'ESR_C');
-add_block('built-in/Sum', [bs '/Terminal voltage vo'], 'Position', box(760, 215, 30, 60), 'Inputs', '++');
-add_block('built-in/Outport', [bs '/vo'], 'Position', box(850, 237, 30, 16), 'Port', '1');
-add_block('built-in/Outport', [bs '/iL'], 'Position', box(850, 77, 30, 16),  'Port', '2');
-add_block('built-in/Outport', [bs '/vc'], 'Position', box(850, 330, 30, 16), 'Port', '3');
+add_block('built-in/Sum', [bs '/Terminal voltage vo'], 'Position', box(800, 215, 30, 60), 'Inputs', '++', 'IconShape', 'rectangular');
+add_block('built-in/Outport', [bs '/vo'], 'Position', box(890, 237, 30, 16), 'Port', '1');
+add_block('built-in/Outport', [bs '/iL'], 'Position', box(890, 77, 30, 16),  'Port', '2');
+add_block('built-in/Outport', [bs '/vc'], 'Position', box(890, 330, 30, 16), 'Port', '3');
 connect(bs, 'q/1', 'Mux/1');
 connect(bs, 'Inductor current/1', 'Mux/2');
 connect(bs, 'Terminal voltage vo/1', 'Mux/3');
@@ -240,14 +241,14 @@ connect(bs, 'Capacitor voltage/1', 'vc/1');
 connect(bs, 'Inductor current/1', 'iL/1');
 
 % --- 3b. Three zones: MOSFET low-side switch + 5 V LED strip ---
-add_block('built-in/Demux', [s '/Gate demux'], 'Position', box(120, 260, 8, 120), 'Outputs', '3');
-add_block('built-in/Mux', [s '/Zone current mux'], 'Position', box(560, 260, 8, 120), 'Inputs', '3');
-add_block('built-in/Constant', [s '/ESP32 + sensors'], 'Position', box(330, 420, 80, 30), 'Value', 'I_esp32');
-add_block('built-in/Sum', [s '/Total load current'], 'Position', box(560, 410, 30, 80), 'Inputs', '++++');
+add_block('built-in/Demux', [s '/Gate demux'], 'Position', box(120, 250, 8, 170), 'Outputs', '3');
+add_block('built-in/Mux', [s '/Zone current mux'], 'Position', box(560, 250, 8, 170), 'Inputs', '3');
+add_block('built-in/Constant', [s '/ESP32 + sensors'], 'Position', box(330, 470, 80, 30), 'Value', 'I_esp32');
+add_block('built-in/Sum', [s '/Total load current'], 'Position', box(560, 450, 30, 80), 'Inputs', '++++', 'IconShape', 'rectangular');
 connect(s, 'q_buck/1', [B '/1']);
 connect(s, 'g_zones/1', 'Gate demux/1');
 for k = 1:3
-    y  = 250 + (k-1)*50;
+    y  = 245 + (k-1)*65;
     mx = sprintf('Mux Z%d', k);
     fz = sprintf('Zone %d MOSFET + LED strip', k);
     add_block('built-in/Mux', [s '/' mx], 'Position', box(200, y, 8, 40), 'Inputs', '2');
@@ -261,21 +262,20 @@ for k = 1:3
 end
 connect(s, 'ESP32 + sensors/1', 'Total load current/4');
 connect(s, 'Total load current/1', [B '/2']);
-outN = {'vo', 'iL', 'i_zones', 'i_load'};
-outY = [57, 97, 312, 442];
-for i = 1:4
+outN = {'vo', 'iL', 'i_zones'};
+outY = [57, 97, 312];
+for i = 1:3
     add_block('built-in/Outport', [s '/' outN{i}], 'Position', box(660, outY(i), 30, 16), 'Port', num2str(i));
 end
 connect(s, [B '/1'], 'vo/1');
 connect(s, [B '/2'], 'iL/1');
 connect(s, 'Zone current mux/1', 'i_zones/1');
-connect(s, 'Total load current/1', 'i_load/1');
 
 %% ================= 4. FEEDBACK LAYER (MONITORING + ENERGY) =================
 F = 'Feedback Layer (Monitoring + Energy)';
 s = [mdl '/' F];
-add_block('built-in/SubSystem', s, 'Position', box(840, 80, 190, 300));
-inN = {'vo', 'iL', 'q_buck', 'd_buck', 'i_zones', 'g_zones', 'duty_zones', 'status'};
+add_block('built-in/SubSystem', s, 'Position', box(880, 60, 210, 420));
+inN = {'vo', 'iL', 'i_zones', 'q_buck', 'g_zones', 'duty_zones', 'd_buck', 'status'};
 for i = 1:8
     add_block('built-in/Inport', [s '/' inN{i}], 'Position', box(30, 40 + (i-1)*60, 30, 16), 'Port', num2str(i));
 end
@@ -322,16 +322,14 @@ connect(mdl, [Pw '/1'], [Pr '/5']);       % output voltage feedback to the ESP32
 connect(mdl, [Pw '/3'], [I '/1']);        % LED light reaches the LDRs (closed lux loop)
 connect(mdl, [Pr '/1'], [Pw '/1']);       % buck MOSFET gate
 connect(mdl, [Pr '/2'], [Pw '/2']);       % zone MOSFET gates
-connect(mdl, [Pw '/1'], [F '/1']);
-connect(mdl, [Pw '/2'], [F '/2']);
-connect(mdl, [Pr '/1'], [F '/3']);
-connect(mdl, [Pr '/4'], [F '/4']);
-connect(mdl, [Pw '/3'], [F '/5']);
-connect(mdl, [Pr '/2'], [F '/6']);
-connect(mdl, [Pr '/3'], [F '/7']);
-connect(mdl, [Pr '/5'], [F '/8']);
-add_block('built-in/Terminator', [mdl '/Terminator'], 'Position', box(790, 225, 20, 20));
-connect(mdl, [Pw '/4'], 'Terminator/1');
+connect(mdl, [Pw '/1'], [F '/1']);       % vo
+connect(mdl, [Pw '/2'], [F '/2']);       % iL
+connect(mdl, [Pw '/3'], [F '/3']);       % zone currents
+connect(mdl, [Pr '/1'], [F '/4']);       % buck gate
+connect(mdl, [Pr '/2'], [F '/5']);       % zone gates
+connect(mdl, [Pr '/3'], [F '/6']);       % zone duty commands
+connect(mdl, [Pr '/4'], [F '/7']);       % buck duty
+connect(mdl, [Pr '/5'], [F '/8']);       % status flags
 
 try
     note = Simulink.Annotation([mdl '/Intelligent Multi-Zone Classroom Lighting System - press Run. ' ...

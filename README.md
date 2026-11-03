@@ -43,6 +43,10 @@ Both options run the same model with the same parameters and open the same 6 das
 
 ## Simulink model structure (`ClassroomLighting.slx`)
 
+![Top level of ClassroomLighting.slx](docs/model_preview/1_top_level.png)
+
+Previews of every subsystem are in [`docs/model_preview`](docs/model_preview). They are drawn from the build script's block positions and connections. They are not MATLAB screenshots, and Simulink will route some lines differently.
+
 The top level matches the block diagram:
 
 * **Input Layer (Sensors)**: LDR per zone (daylight + the zone's own LED light, ADC-averaged), PIR (occupancy per zone), DHT11 temperature and humidity. They are read every 1 ms.
