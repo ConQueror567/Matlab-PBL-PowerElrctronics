@@ -33,24 +33,25 @@ Both options run the same model with the same parameters and open the same 6 das
 | File | What it is |
 |---|---|
 | `lighting_params.m` | **All parameters**: buck design, PID gains, LED zones, classroom-day sensor scenario |
-| `esp32_controller.m` | ESP32 decision rules: daylight harvesting + occupancy + thermal derating (stand-in for the ML model) |
+| `esp32_controller.m` | ESP32 decision rules: closed-loop daylight harvesting + occupancy + thermal derating (stand-in for the ML model) |
 | `controller_config.m` | Controller settings: target 500 lux, thresholds |
 | `build_lighting_model.m` | Builds the Simulink model `ClassroomLighting.slx` |
 | `run_lighting_simulation.m` | Same simulation as a plain MATLAB script |
 | `lighting_dashboard.m` | Feedback/communication layer: hourly report, energy analytics, plots |
+| `DESIGN_REVIEW.md` | **Read before building the hardware**: issues found, components to replace or add |
 | `esp32_controller_vec.m` | Wrapper used only by the `'interpreted'` build |
 
 ## Simulink model structure (`ClassroomLighting.slx`)
 
 The top level matches the block diagram:
 
-* **Input Layer (Sensors)**: LDR (lux per zone), PIR (occupancy per zone), DHT11 temperature and humidity. They are read every 1 ms.
+* **Input Layer (Sensors)**: LDR per zone (daylight + the zone's own LED light, ADC-averaged), PIR (occupancy per zone), DHT11 temperature and humidity. They are read every 1 ms.
 * **Processing Layer (ESP32)**
   * *AI Decision Engine* (MATLAB Function → `esp32_controller.m`) outputs the duty of each zone.
-  * Buck voltage controller: soft-start → feed-forward `Vref/Vin` + PID (filtered D) → 50 kHz PWM.
+  * Digital buck voltage controller: ADC sample once per PWM period → soft-start → feed-forward `Vref/Vin` + PID (filtered D) → one-period computation delay → 50 kHz PWM.
   * Zone PWM: three 5 kHz PWMs, phase shifted 120° (interleaved).
 * **Power & Lighting Layer**
-  * *Buck Converter 12V-5V*: MOSFET + Schottky diode + L + C, with conduction losses (Rds_on, DCR, diode drop). Includes DCM at light load.
+  * *Buck Converter 12V-5V*: MOSFET + Schottky diode + L + C, with conduction losses (Rds_on, DCR, diode drop) and capacitor ESR. Includes DCM at light load.
   * *Zone k MOSFET + LED strip*: low-side MOSFET switch and an LED strip model (knee voltage + series resistance).
 * **Feedback Layer (Monitoring + Energy)**: scopes, energy meters (input, each zone, ESP32) and the `sim_log` data log.
 * **Communication Layer**: the dashboard figures (`lighting_dashboard.m`, model StopFcn).
@@ -63,16 +64,16 @@ The top level matches the block diagram:
 | Switching frequency | 50 kHz |
 | Duty cycle | D = Vo/Vin = 0.417 ideal, ≈ 0.44 with losses |
 | Inductor | 68 µH → ΔI_L = Vo(1−D)/(f·L) ≈ 0.86 A p-p |
-| Capacitor | 1000 µF → LC resonance ≈ 610 Hz |
-| Voltage controller | PID, zeros on the LC resonance, crossover 3 kHz |
+| Capacitor | 1000 µF (2 × 470 µF low-ESR, 30 mΩ total) → LC resonance ≈ 610 Hz |
+| Voltage controller | Digital PID sampled at 50 kHz, zeros on the LC resonance, crossover 1.5 kHz (≈ 8–12 dB gain margin) |
 | LED dimming PWM | 5 kHz, 3 zones interleaved |
 | Simulation | 1 school hour = 25 ms of circuit time, 9 hours (08:00–16:00), step 0.2 µs |
 
 ## Results (from the plain-MATLAB run)
 
-* 5 V rail regulated at 5.000 V every hour. Ripple is 2–80 mV, mainly from the 5 kHz LED PWM load steps.
-* Every occupied zone is held at the 500 lux target. Daylight is used first, and an empty zone is switched off.
-* Converter efficiency is 93–98%. Only conduction losses are modelled, so switching losses would lower this somewhat.
+* 5 V rail regulated at 5.01 V every hour. Ripple is 42–155 mV (≤ 3%), mainly from the ESR and the 5 kHz LED PWM load steps.
+* Every occupied zone is held at 500 ± 2 lux. Daylight is used first, and an empty zone is switched off.
+* Converter efficiency is 93–97%. Only conduction losses are modelled, so switching losses would lower this somewhat.
 * Energy per day: 52 Wh for LEDs versus 135 Wh for conventional always-on lighting, a **61% saving**. Counting the ESP32 and converter losses from the 12 V input, the saving is **50%**.
 
 ## Things to try

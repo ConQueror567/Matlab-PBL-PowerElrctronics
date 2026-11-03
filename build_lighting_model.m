@@ -11,7 +11,8 @@ function build_lighting_model(varargin)
 % top level follows the project block diagram:
 %
 %   Input Layer (Sensors) -> Processing Layer (ESP32) -> Power & Lighting Layer
-%                                    ^  vo feedback  <-------------'   |
+%        ^  LED light on LDRs        ^  vo feedback  <-------------'   |
+%        '---------------------------+-------------------------------'   |
 %                                    '-> Feedback Layer (Monitoring + Energy) <-'
 %
 % After the build, press Run in Simulink. When the simulation ends, the
@@ -47,26 +48,44 @@ trySet(mdl, 'SaveOutput', 'off');
 trySet(mdl, 'SaveState', 'off');
 set_param(mdl, 'PreLoadFcn', 'try, lighting_params; catch, end');
 set_param(mdl, 'InitFcn', ['try, addpath(fileparts(get_param(''' mdl ''', ''FileName''))); catch, end' ...
-                           char(10) 'lighting_params;']);
+                           char(10) 'lighting_params;' char(10) 'clear esp32_controller;']);
 set_param(mdl, 'StopFcn', 'lighting_dashboard;');
 
 %% ================= 1. INPUT LAYER (SENSORS) =================
 I = 'Input Layer (Sensors)';
 s = [mdl '/' I];
-add_block('built-in/SubSystem', s, 'Position', box(40, 120, 150, 200));
-sens = {'LDR daylight (lux)',     'sens_ldr',  'LDR'; ...
-        'PIR presence',           'sens_pir',  'PIR'; ...
-        'DHT11 temperature (C)',  'sens_temp', 'Temp'; ...
-        'DHT11 humidity (pct)',   'sens_hum',  'Hum'};
+add_block('built-in/SubSystem', s, 'Position', box(40, 120, 150, 200));   % input 1: zone currents
+sens = {'Daylight on desks (lux)', 'sens_ldr',  'LDR'; ...
+        'PIR presence',            'sens_pir',  'PIR'; ...
+        'DHT11 temperature (C)',   'sens_temp', 'Temp'; ...
+        'DHT11 humidity (pct)',    'sens_hum',  'Hum'};
 for i = 1:4
     y = 40 + (i-1)*90;
     b = [s '/' sens{i,1}];
     add_block('built-in/FromWorkspace', b, 'Position', box(40, y, 150, 50), ...
               'VariableName', sens{i,2}, 'SampleTime', 'Ts_ctrl', 'Interpolate', 'off');
     trySet(b, 'OutputAfterFinalValue', 'Holding final value');
-    add_block('built-in/Outport', [s '/' sens{i,3}], 'Position', box(280, y+17, 30, 16), 'Port', num2str(i));
-    connect(s, [sens{i,1} '/1'], [sens{i,3} '/1']);
+    add_block('built-in/Outport', [s '/' sens{i,3}], 'Position', box(760, y+17, 30, 16), 'Port', num2str(i));
+    if i > 1, connect(s, [sens{i,1} '/1'], [sens{i,3} '/1']); end
 end
+% Each LDR also sees the light of its own LED zone. The ESP32 averages its ADC
+% readings over each control period (oversampling), which removes the 5 kHz flicker:
+%   LDR = daylight + (1/Ts_ctrl) * integral of LED light over the last period
+add_block('built-in/Inport', [s '/i_zones'], 'Position', box(40, 420, 30, 16), 'Port', '1');
+add_block('built-in/Gain', [s '/LED lux per ampere'], 'Position', box(110, 413, 110, 30), ...
+          'Gain', 'lux_led_max/I_led_nom');
+add_block('built-in/Integrator', [s '/LED light integral'], 'Position', box(250, 413, 40, 30));
+add_block('built-in/ZeroOrderHold', [s '/ADC sample'], 'Position', box(320, 413, 40, 30), 'SampleTime', 'Ts_ctrl');
+add_block('built-in/DiscreteTransferFcn', [s '/Average over Ts_ctrl'], 'Position', box(390, 405, 120, 46), ...
+          'Numerator', '[1 -1]', 'Denominator', '[Ts_ctrl 0]', 'SampleTime', 'Ts_ctrl');
+add_block('built-in/Sum', [s '/LDR reading'], 'Position', box(620, 45, 30, 40), 'Inputs', '++');
+connect(s, 'i_zones/1', 'LED lux per ampere/1');
+connect(s, 'LED lux per ampere/1', 'LED light integral/1');
+connect(s, 'LED light integral/1', 'ADC sample/1');
+connect(s, 'ADC sample/1', 'Average over Ts_ctrl/1');
+connect(s, [sens{1,1} '/1'], 'LDR reading/1');
+connect(s, 'Average over Ts_ctrl/1', 'LDR reading/2');
+connect(s, 'LDR reading/1', 'LDR/1');
 
 %% ================= 2. PROCESSING LAYER (ESP32) =================
 Pr = 'Processing Layer (ESP32)';
@@ -105,39 +124,46 @@ else
     srcDuty = 'Decision demux/1';  srcStatus = 'Decision demux/2';
 end
 
-% --- 2b. Buck voltage controller: feed-forward + PID, 50 kHz PWM ---
+% --- 2b. Digital buck voltage controller: ADC sample per PWM period, PID, 50 kHz PWM ---
 add_block('built-in/Clock', [s '/Clock'], 'Position', box(30, 420, 30, 30));
-add_block('built-in/Fcn', [s '/Soft-start Vref'], 'Position', box(110, 420, 150, 30), ...
+add_block('built-in/Fcn', [s '/Soft-start Vref'], 'Position', box(90, 420, 150, 30), ...
           'Expr', 'Vo_ref*((u(1)<t_ss)*u(1)/t_ss + (u(1)>=t_ss))');
-add_block('built-in/Sum', [s '/Error e'], 'Position', box(300, 450, 30, 30), 'Inputs', '+-');
+add_block('built-in/ZeroOrderHold', [s '/Vref sample'], 'Position', box(260, 420, 40, 30), 'SampleTime', 'Ts_v');
+add_block('built-in/ZeroOrderHold', [s '/ADC sample vo'], 'Position', box(130, 320, 40, 30), 'SampleTime', 'Ts_v');
+add_block('built-in/Sum', [s '/Error e'], 'Position', box(320, 450, 30, 30), 'Inputs', '+-');
 add_block('built-in/Gain', [s '/Feed-forward 1 over Vin'], 'Position', box(380, 380, 60, 30), 'Gain', '1/Vin');
 add_block('built-in/Gain', [s '/Kp'], 'Position', box(380, 440, 60, 30), 'Gain', 'Kp_v');
 add_block('built-in/Gain', [s '/Ki'], 'Position', box(380, 500, 60, 30), 'Gain', 'Ki_v');
-add_block('built-in/Integrator', [s '/Integral (anti-windup)'], 'Position', box(470, 500, 40, 30), ...
-          'LimitOutput', 'on', 'UpperSaturationLimit', 'xi_max', 'LowerSaturationLimit', 'xi_min');
-add_block('built-in/TransferFcn', [s '/Filtered derivative'], 'Position', box(380, 560, 110, 40), ...
-          'Numerator', '[-Kd_v 0]', 'Denominator', '[tau_d 1]');
+add_block('built-in/DiscreteIntegrator', [s '/Integral (anti-windup)'], 'Position', box(470, 500, 50, 30), ...
+          'gainval', '1', 'SampleTime', 'Ts_v', 'LimitOutput', 'on', ...
+          'UpperSaturationLimit', 'xi_max', 'LowerSaturationLimit', 'xi_min');
+add_block('built-in/DiscreteTransferFcn', [s '/Filtered derivative'], 'Position', box(330, 560, 170, 46), ...
+          'Numerator', '[-Kd_v Kd_v]', 'Denominator', '[tau_d+Ts_v -tau_d]', 'SampleTime', 'Ts_v');
 add_block('built-in/Sum', [s '/Duty sum'], 'Position', box(560, 400, 30, 200), 'Inputs', '++++');
-add_block('built-in/Saturate', [s '/Duty limit'], 'Position', box(630, 485, 40, 30), ...
+add_block('built-in/Saturate', [s '/Duty limit'], 'Position', box(620, 485, 40, 30), ...
           'UpperLimit', 'd_max', 'LowerLimit', '0');
-add_block('built-in/Mux', [s '/Mux buck PWM'], 'Position', box(720, 440, 8, 60), 'Inputs', '2');
-add_block('built-in/Fcn', [s '/Buck PWM 50 kHz'], 'Position', box(780, 455, 200, 30), ...
+add_block('built-in/UnitDelay', [s '/Computation delay'], 'Position', box(680, 485, 40, 30), 'SampleTime', 'Ts_v');
+add_block('built-in/Mux', [s '/Mux buck PWM'], 'Position', box(750, 440, 8, 60), 'Inputs', '2');
+add_block('built-in/Fcn', [s '/Buck PWM 50 kHz'], 'Position', box(790, 455, 200, 30), ...
           'Expr', '(u(1)*fsw - floor(u(1)*fsw)) < u(2)');
 connect(s, 'Clock/1', 'Soft-start Vref/1');
-connect(s, 'Soft-start Vref/1', 'Error e/1');
-connect(s, 'Vo feedback/1', 'Error e/2');
-connect(s, 'Soft-start Vref/1', 'Feed-forward 1 over Vin/1');
+connect(s, 'Soft-start Vref/1', 'Vref sample/1');
+connect(s, 'Vo feedback/1', 'ADC sample vo/1');
+connect(s, 'Vref sample/1', 'Error e/1');
+connect(s, 'ADC sample vo/1', 'Error e/2');
+connect(s, 'Vref sample/1', 'Feed-forward 1 over Vin/1');
 connect(s, 'Error e/1', 'Kp/1');
 connect(s, 'Error e/1', 'Ki/1');
 connect(s, 'Ki/1', 'Integral (anti-windup)/1');
-connect(s, 'Vo feedback/1', 'Filtered derivative/1');
+connect(s, 'ADC sample vo/1', 'Filtered derivative/1');
 connect(s, 'Feed-forward 1 over Vin/1', 'Duty sum/1');
 connect(s, 'Kp/1', 'Duty sum/2');
 connect(s, 'Integral (anti-windup)/1', 'Duty sum/3');
 connect(s, 'Filtered derivative/1', 'Duty sum/4');
 connect(s, 'Duty sum/1', 'Duty limit/1');
+connect(s, 'Duty limit/1', 'Computation delay/1');
 connect(s, 'Clock/1', 'Mux buck PWM/1');
-connect(s, 'Duty limit/1', 'Mux buck PWM/2');
+connect(s, 'Computation delay/1', 'Mux buck PWM/2');
 connect(s, 'Mux buck PWM/1', 'Buck PWM 50 kHz/1');
 
 % --- 2c. Zone PWM (ESP32 LEDC, 5 kHz, phase shifted by 120 degrees) ---
@@ -166,7 +192,7 @@ end
 connect(s, 'Buck PWM 50 kHz/1', 'q_buck/1');
 connect(s, 'Gate mux/1', 'g_zones/1');
 connect(s, srcDuty, 'duty_zones/1');
-connect(s, 'Duty limit/1', 'd_buck/1');
+connect(s, 'Computation delay/1', 'd_buck/1');
 connect(s, srcStatus, 'status/1');
 
 %% ================= 3. POWER & LIGHTING LAYER =================
@@ -191,11 +217,14 @@ add_block('built-in/Integrator', [bs '/Inductor current'], 'Position', box(630, 
 add_block('built-in/Sum', [bs '/Capacitor current'], 'Position', box(540, 210, 30, 40), 'Inputs', '+-');
 add_block('built-in/Gain', [bs '/1 over C'], 'Position', box(600, 215, 60, 30), 'Gain', '1/C_buck');
 add_block('built-in/Integrator', [bs '/Capacitor voltage'], 'Position', box(690, 215, 40, 30), 'InitialCondition', '0');
-add_block('built-in/Outport', [bs '/vo'], 'Position', box(800, 222, 30, 16), 'Port', '1');
-add_block('built-in/Outport', [bs '/iL'], 'Position', box(800, 77, 30, 16),  'Port', '2');
+add_block('built-in/Gain', [bs '/ESR'], 'Position', box(600, 290, 60, 30), 'Gain', 'ESR_C');
+add_block('built-in/Sum', [bs '/Terminal voltage vo'], 'Position', box(760, 215, 30, 60), 'Inputs', '++');
+add_block('built-in/Outport', [bs '/vo'], 'Position', box(850, 237, 30, 16), 'Port', '1');
+add_block('built-in/Outport', [bs '/iL'], 'Position', box(850, 77, 30, 16),  'Port', '2');
+add_block('built-in/Outport', [bs '/vc'], 'Position', box(850, 330, 30, 16), 'Port', '3');
 connect(bs, 'q/1', 'Mux/1');
 connect(bs, 'Inductor current/1', 'Mux/2');
-connect(bs, 'Capacitor voltage/1', 'Mux/3');
+connect(bs, 'Terminal voltage vo/1', 'Mux/3');
 connect(bs, 'Mux/1', 'Inductor voltage vL/1');
 connect(bs, 'Inductor voltage vL/1', '1 over L/1');
 connect(bs, '1 over L/1', 'Inductor current/1');
@@ -203,7 +232,11 @@ connect(bs, 'Inductor current/1', 'Capacitor current/1');
 connect(bs, 'i_load/1', 'Capacitor current/2');
 connect(bs, 'Capacitor current/1', '1 over C/1');
 connect(bs, '1 over C/1', 'Capacitor voltage/1');
-connect(bs, 'Capacitor voltage/1', 'vo/1');
+connect(bs, 'Capacitor current/1', 'ESR/1');
+connect(bs, 'Capacitor voltage/1', 'Terminal voltage vo/1');
+connect(bs, 'ESR/1', 'Terminal voltage vo/2');
+connect(bs, 'Terminal voltage vo/1', 'vo/1');
+connect(bs, 'Capacitor voltage/1', 'vc/1');
 connect(bs, 'Inductor current/1', 'iL/1');
 
 % --- 3b. Three zones: MOSFET low-side switch + 5 V LED strip ---
@@ -221,7 +254,7 @@ for k = 1:3
     add_block('built-in/Fcn', [s '/' fz], 'Position', box(250, y+5, 260, 30), ...
               'Expr', 'u(1)*(u(2)>Vf_led)*(u(2)-Vf_led)/R_led');
     connect(s, sprintf('Gate demux/%d', k), [mx '/1']);
-    connect(s, [B '/1'], [mx '/2']);
+    connect(s, [B '/3'], [mx '/2']);     % capacitor voltage (avoids an algebraic loop via the ESR)
     connect(s, [mx '/1'], [fz '/1']);
     connect(s, [fz '/1'], sprintf('Zone current mux/%d', k));
     connect(s, [fz '/1'], sprintf('Total load current/%d', k));
@@ -286,6 +319,7 @@ connect(s, 'duty_zones/1', 'Scope Zone duty from ESP32/1');
 %% ================= Top-level wiring =================
 for i = 1:4, connect(mdl, sprintf('%s/%d', I, i), sprintf('%s/%d', Pr, i)); end
 connect(mdl, [Pw '/1'], [Pr '/5']);       % output voltage feedback to the ESP32
+connect(mdl, [Pw '/3'], [I '/1']);        % LED light reaches the LDRs (closed lux loop)
 connect(mdl, [Pr '/1'], [Pw '/1']);       % buck MOSFET gate
 connect(mdl, [Pr '/2'], [Pw '/2']);       % zone MOSFET gates
 connect(mdl, [Pw '/1'], [F '/1']);

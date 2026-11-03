@@ -15,19 +15,26 @@ Vin     = 12;        % [V]   DC adapter input
 Vo_ref  = 5;         % [V]   regulated output rail (LED strips + ESP32)
 fsw     = 50e3;      % [Hz]  MOSFET switching frequency
 L_buck  = 68e-6;     % [H]   buck inductor
-C_buck  = 1000e-6;   % [F]   output capacitor (e.g. 2 x 470 uF low-ESR)
+C_buck  = 1000e-6;   % [F]   output capacitor (2 x 470 uF / 16 V low-ESR in parallel)
+ESR_C   = 0.03;      % [ohm] total capacitor ESR (each 470 uF ~ 60 mohm)
 rL      = 0.05;      % [ohm] inductor winding resistance (DCR)
-Rds_on  = 0.03;      % [ohm] MOSFET on-resistance (e.g. IRLZ44N, logic level)
-Vd      = 0.45;      % [V]   freewheeling Schottky diode drop (e.g. SS34)
+Rds_on  = 0.03;      % [ohm] high-side MOSFET on-resistance (P-ch e.g. AOD4185, or N-ch + bootstrap driver)
+Vd      = 0.45;      % [V]   freewheeling Schottky diode drop (e.g. SS54 / SS34)
 
-% Voltage-mode controller running on the ESP32:
-%   duty = Vref/Vin (feed-forward) + Kp*e + Ki*int(e) - Kd*s/(tau_d*s+1)*vo
+% Digital voltage-mode controller running on the ESP32:
+%   the ADC samples vo once per PWM period (Ts_v); the new duty is applied one
+%   period later (computation delay), exactly as firmware in a timer ISR would.
+%   duty = Vref/Vin (feed-forward) + Kp*e + Ki*sum(e)*Ts - filtered D-term on vo
 % Design (PID = "Type-III" compensator): the two PID zeros are placed on the
 % LC double pole w0, with damping zeta_z, which cancels the lightly damped
 % resonance. The loop then behaves like an integrator Vin*Kd*w0^2/s that
 % crosses 0 dB at f_c.
+% Why 1.5 kHz: with the sampling + one-period delay, a 3 kHz crossover leaves
+% only 1.5-6 dB gain margin (depending on ESR). 1.5 kHz keeps ~8-12 dB gain
+% margin and 35-60 deg phase margin for ESR between 0 and 60 mohm.
+Ts_v    = 1/fsw;                     % [s] voltage-loop sample time (one ADC sample per PWM period)
 w0      = 1/sqrt(L_buck*C_buck);     % [rad/s] LC resonance (~610 Hz)
-f_c     = 3e3;                       % [Hz] target loop crossover (< fsw/10)
+f_c     = 1.5e3;                     % [Hz] target loop crossover
 zeta_z  = 0.7;                       % damping of the compensator zeros
 Kd_v    = 2*pi*f_c/(Vin*w0^2);       % derivative gain   [s/V]
 Kp_v    = 2*zeta_z*w0*Kd_v;          % proportional gain [1/V]
@@ -50,13 +57,18 @@ P_zone_nom = Vo_ref*I_led_nom;          % [W] zone power at 100 % duty (= 5 W)
 I_esp32    = 0.25;           % [A] ESP32 + sensors, drawn from the 5 V rail
 
 %% ---------------- 3. ESP32 controller ----------------
-Ts_ctrl     = 1e-3;                  % [s] controller update period
+Ts_ctrl     = 1e-3;                  % [s] lighting controller update period (sensor sampling)
+% The ESP32 reads each LDR many times per control period and averages the
+% readings (ADC oversampling). This removes the 5 kHz LED flicker from the
+% measurement. The model uses the exact average over each 1 ms period.
 ctrl_cfg    = controller_config();   % lux target, thresholds, ... (shared with the controller)
 lux_led_max = ctrl_cfg.lux_led_max;  % [lux] desk illuminance of one zone at 100 % duty
 
 %% ---------------- 4. Classroom day scenario (sensor readings) ----------------
 % One row = one hour of the school day.
-%   hour | LDR daylight on the desks [lux] Z1 Z2 Z3 | PIR occupancy Z1 Z2 Z3 | Temp [C] | Hum [%]
+%   hour | daylight on the desks [lux] Z1 Z2 Z3 | PIR occupancy Z1 Z2 Z3 | Temp [C] | Hum [%]
+% Note: each zone's LDR measures daylight PLUS the light of its own LED strip
+% (the plant adds the LED part), so the controller works in closed loop.
 scenario = [ ...
      8   120   80   40    1 1 1   26  62     % class starts, low morning light
      9   300  190   90    1 1 1   27  60
